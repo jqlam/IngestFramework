@@ -11,6 +11,7 @@ class PokemonIngestor:
             pass
     
     def __del__(self):
+        print("Deleting object")
         self._close_db_connection()
     
     def _open_db_connection(self):
@@ -29,9 +30,9 @@ class PokemonIngestor:
     def _close_db_connection(self):
         try:
             if self._conn:
+                self._log("connection", "Closed connection")
                 self._conn.close()
                 self._conn = None
-                self._log("connection", "Closed connection")
         except:
             pass
 
@@ -39,28 +40,29 @@ class PokemonIngestor:
         cursor = self._conn.cursor()
         f = open(self._file_name, 'r')
         batch = self._get_batch()
-        # try:
-        #     cursor.copy_expert("copy pocket.pokemon_raw (pokemon_name, color, type_id_1, type_id_2, region, egg_id_1, egg_id_2, pre_evo) from STDIN with (format 'csv', header false)", f)
-        # except:
-        #     print("Something went wrong with the SQL statement!")
-        #     self._log("error", "Failed attempt to ingest new data")
-        lines = len(f.readlines())
+        try:
+            cursor.copy_expert("copy pocket.pokemon_raw (pokemon_name, color, type_id_1, type_id_2, region, egg_id_1, egg_id_2, pre_evo) from STDIN with (format 'csv', header false)", f)
+        except:
+            print("Something went wrong with the SQL statement!")
+            self._log("error", "Failed attempt to ingest new data")
+        lines = self._get_lines
         sql = (f"update pocket.pokemon_raw set batch_id = {batch} where batch_id is NULL;")
         cursor.execute(sql)
-        self._update_control_table(batch)
-        # self._log("log", str(f"{lines} added in batch {batch}"))
+        self._update_control_table(batch, "stage_max_batch")
+        self._log("log", str(f"{lines} added in batch {batch}"))
         if commit:
             self._conn.commit()
         cursor.close()
         f.close()
         return batch
-    
+
     def _log(self, log_level: str, log_message: str, invoker: str = "jqlam", commit: bool = True):
-        cursor = self._conn.cursor
-        sql = (str(f"insert into pocket.log_table(invoker, log_level, log_message) values ('{invoker}','{log_level}','{log_message}');"))
-        cursor.execute(sql)
+        cursor = self._conn.cursor()
+        psq = f"insert into pocket.log_table(invoker, log_level, log_message) values ('{invoker}','{log_level}','{log_message}');"
+        cursor.execute(psq)
         if commit:
             self._conn.commit()
+        cursor.close()
 
     def _get_batch(self):
         x = datetime.datetime.now()
@@ -69,11 +71,10 @@ class PokemonIngestor:
         batch += x.strftime("%d")
         return batch
     
-    def _update_control_table(self, batch):
-        column = "ingest_max_batch"
+    def _update_control_table(self, batch, column):
         cursor = self._conn.cursor()
-        sql = (f"update pocket.control_table set {column} = {batch};")
-        cursor.execute(sql)
+        psq = (f"update pocket.control_table set {column} = {batch};")
+        cursor.execute(psq)
         cursor.close()
     
     def _has_data(self) -> bool:
@@ -85,7 +86,7 @@ class PokemonIngestor:
         ingest_max = int(entries[3])
         return stage_max > ingest_max
     
-    def _translateType(type_name):
+    def _translateType(self, type_name):
         if (type_name == "Bug"):
             return "1"
         elif (type_name == "Dark"):
@@ -125,7 +126,7 @@ class PokemonIngestor:
         else:
             return "null"
         
-    def _translateRegion(region):
+    def _translateRegion(self, region):
         if (region == "Kanto"):
             return "1"
         elif (region == "Johto"):
@@ -149,7 +150,7 @@ class PokemonIngestor:
         else:
             return "null"
 
-    def _translateEgg(egg):
+    def _translateEgg(self, egg):
         if (egg == "Amorphous"):
             return "1"
         elif (egg == "Bug"):
@@ -191,7 +192,7 @@ class PokemonIngestor:
         ingest_max = int(entries[3])
         return ingest_max
 
-    def ingest_data(self):
+    def ingest_data(self, commit: bool = True):
         if not self._has_data:
             return
         cursor = self._conn.cursor()
@@ -199,6 +200,8 @@ class PokemonIngestor:
         sql = f"select * from pocket.pokemon_raw where batch_id > {max_ingest_batch};"
         cursor.execute(sql)
         new_data = cursor.fetchall()
+        counter = 0
+        max_batch = 0
         for entry in new_data:
             name = entry[1]
             color = entry[2]
@@ -207,11 +210,23 @@ class PokemonIngestor:
             region = self._translateRegion(entry[5])
             egg_1 = self._translateEgg(entry[6])
             egg_2 = self._translateEgg(entry[7])
+            pre_evo = entry[8]
+            if max_batch < int(entry[11]):
+                max_batch = int(entry[11])
+            sql = f"insert into pocket.pokemon(pokemon_name, color, type_id_1, type_id_2, region, egg_id_1, egg_id_2, pre_evo) \
+                values ('{name}', '{color}', {type_1}, {type_2}, {region}, {egg_1}, {egg_2}, '{pre_evo}');"
+            cursor.execute(sql)
+            counter += 1
+        self._log("log", f"{counter} lines ingested into pocket.pokemon")
+        self._update_control_table(max_batch, "ingest_max_batch")
+        if (commit):
+            self._conn.commit()
 
 def main(filename):
     print(filename)
     ingestTest = PokemonIngestor(filename)
-    ingestTest.ingest_raw_data()
+    ingestTest.ingest_data()
+    del ingestTest
 
 if __name__ == "__main__":
     main(sys.argv[1])
