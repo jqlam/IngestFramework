@@ -45,7 +45,7 @@ class PokemonIngestor:
         except:
             print("Something went wrong with the SQL statement!")
             self._log("error", "Failed attempt to ingest new data")
-        lines = self._get_lines
+        lines = "???" #Placeholder b/c lines are not counting properly
         sql = (f"update pocket.pokemon_raw set batch_id = {batch} where batch_id is NULL;")
         cursor.execute(sql)
         self._update_control_table(batch, "stage_max_batch")
@@ -225,6 +225,7 @@ class PokemonIngestor:
 def main(filename):
     print(filename)
     ingestTest = PokemonIngestor(filename)
+    ingestTest.ingest_raw_data()
     ingestTest.ingest_data()
     del ingestTest
 
